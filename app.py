@@ -398,6 +398,24 @@ with gr.Blocks(delete_cache=(600, 600)) as demo:
 
 # Launch the Gradio app
 if __name__ == "__main__":
+    import argparse
+    from trellis.utils.vram_manager import init_vram_manager
+
+    parser = argparse.ArgumentParser(description="TRELLIS Image-to-3D (Blackwell)")
+    parser.add_argument('--precision', choices=['auto', 'full', 'half'], default='auto',
+                        help='Precision mode: auto (detect VRAM), full (float32), half (float16)')
+    parser.add_argument('--vram-tier', choices=['auto', 'high', 'medium', 'low'], default='auto',
+                        help='VRAM tier: auto (detect), high (>=24GB), medium (12-23GB), low (8-11GB)')
+    parser.add_argument('--host', default='0.0.0.0', help='Host to bind to')
+    parser.add_argument('--port', type=int, default=7860, help='Port to bind to')
+    parser.add_argument('--share', action='store_true', help='Create public Gradio link')
+    args = parser.parse_args()
+
+    vm = init_vram_manager(precision=args.precision, vram_tier=args.vram_tier)
+
     pipeline = TrellisImageTo3DPipeline.from_pretrained("microsoft/TRELLIS-image-large")
     pipeline.cuda()
-    demo.launch()
+    if vm.dtype == torch.float16:
+        pipeline.to_dtype(torch.float16)
+
+    demo.launch(server_name=args.host, server_port=args.port, share=args.share)

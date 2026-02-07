@@ -7,6 +7,8 @@ if ATTN == 'xformers':
     import xformers.ops as xops
 elif ATTN == 'flash_attn':
     import flash_attn
+elif ATTN == 'sdpa':
+    from torch.nn.functional import scaled_dot_product_attention as sdpa
 else:
     raise ValueError(f"Unknown attention module: {ATTN}")
 
@@ -206,6 +208,23 @@ def sparse_scaled_dot_product_attention(*args, **kwargs):
             out = flash_attn.flash_attn_varlen_kvpacked_func(q, kv, cu_seqlens_q, cu_seqlens_kv, max(q_seqlen), max(kv_seqlen))
         elif num_all_args == 3:
             out = flash_attn.flash_attn_varlen_func(q, k, v, cu_seqlens_q, cu_seqlens_kv, max(q_seqlen), max(kv_seqlen))
+    elif ATTN == 'sdpa':
+        if num_all_args == 1:
+            q, k, v = qkv.unbind(dim=1)
+        elif num_all_args == 2:
+            k, v = kv.unbind(dim=1)
+        # Process each sequence in the batch separately for variable-length support
+        outs = []
+        q_offset, kv_offset = 0, 0
+        for qi_len, kvi_len in zip(q_seqlen, kv_seqlen):
+            qi = q[q_offset:q_offset+qi_len].unsqueeze(0).permute(0, 2, 1, 3)    # [1, H, Lq, C]
+            ki = k[kv_offset:kv_offset+kvi_len].unsqueeze(0).permute(0, 2, 1, 3)  # [1, H, Lkv, C]
+            vi = v[kv_offset:kv_offset+kvi_len].unsqueeze(0).permute(0, 2, 1, 3)  # [1, H, Lkv, C]
+            oi = sdpa(qi, ki, vi)                                                   # [1, H, Lq, C]
+            outs.append(oi.permute(0, 2, 1, 3).squeeze(0))                          # [Lq, H, C]
+            q_offset += qi_len
+            kv_offset += kvi_len
+        out = torch.cat(outs, dim=0)
     else:
         raise ValueError(f"Unknown attention module: {ATTN}")
     

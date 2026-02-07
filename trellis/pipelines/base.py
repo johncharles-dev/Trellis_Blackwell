@@ -2,6 +2,7 @@ from typing import *
 import torch
 import torch.nn as nn
 from .. import models
+from ..utils.vram_manager import get_vram_manager
 
 
 class Pipeline:
@@ -52,17 +53,58 @@ class Pipeline:
         for model in self.models.values():
             if hasattr(model, 'device'):
                 return model.device
-        for model in self.models.values():
             if hasattr(model, 'parameters'):
-                return next(model.parameters()).device
-        raise RuntimeError("No device found.")
+                try:
+                    return next(model.parameters()).device
+                except StopIteration:
+                    continue
+        return torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-    def to(self, device: torch.device) -> None:
+    def to(self, device_or_dtype) -> "Pipeline":
+        """
+        Move all models to a device or cast to a dtype.
+        """
         for model in self.models.values():
-            model.to(device)
+            model.to(device_or_dtype)
+        return self
 
-    def cuda(self) -> None:
+    def cuda(self) -> "Pipeline":
         self.to(torch.device("cuda"))
+        return self
 
-    def cpu(self) -> None:
+    def cpu(self) -> "Pipeline":
         self.to(torch.device("cpu"))
+        return self
+
+    def to_dtype(self, dtype: torch.dtype) -> "Pipeline":
+        """
+        Cast all model parameters to the given dtype.
+        """
+        for model in self.models.values():
+            model.to(dtype)
+        return self
+
+    # ---- Model swapping (Layer 4) ----
+
+    def _move_models(self, names: List[str], device: str, empty_cache: bool = True):
+        """
+        Move specified models to device. Used for CPU<->GPU swapping.
+        """
+        for name in names:
+            if name not in self.models:
+                continue
+            try:
+                current = next(self.models[name].parameters()).device
+            except StopIteration:
+                continue
+            target = torch.device(device)
+            if current != target:
+                self.models[name].to(device)
+        if empty_cache and device == 'cpu':
+            torch.cuda.empty_cache()
+
+    def _move_all_models_to_cpu(self):
+        """
+        Move all models to CPU and free CUDA memory.
+        """
+        self._move_models(list(self.models.keys()), 'cpu', empty_cache=True)

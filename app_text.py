@@ -7,6 +7,7 @@ from typing import *
 import torch
 import numpy as np
 import imageio
+import open3d as o3d
 from easydict import EasyDict as edict
 from trellis.pipelines import TrellisTextTo3DPipeline
 from trellis.representations import Gaussian, MeshExtractResult
@@ -21,8 +22,8 @@ os.makedirs(TMP_DIR, exist_ok=True)
 def start_session(req: gr.Request):
     user_dir = os.path.join(TMP_DIR, str(req.session_hash))
     os.makedirs(user_dir, exist_ok=True)
-    
-    
+
+
 def end_session(req: gr.Request):
     user_dir = os.path.join(TMP_DIR, str(req.session_hash))
     shutil.rmtree(user_dir)
@@ -43,8 +44,8 @@ def pack_state(gs: Gaussian, mesh: MeshExtractResult) -> dict:
             'faces': mesh.faces.cpu().numpy(),
         },
     }
-    
-    
+
+
 def unpack_state(state: dict) -> Tuple[Gaussian, edict, str]:
     gs = Gaussian(
         aabb=state['gaussian']['aabb'],
@@ -59,19 +60,24 @@ def unpack_state(state: dict) -> Tuple[Gaussian, edict, str]:
     gs._scaling = torch.tensor(state['gaussian']['_scaling'], device='cuda')
     gs._rotation = torch.tensor(state['gaussian']['_rotation'], device='cuda')
     gs._opacity = torch.tensor(state['gaussian']['_opacity'], device='cuda')
-    
+
     mesh = edict(
         vertices=torch.tensor(state['mesh']['vertices'], device='cuda'),
         faces=torch.tensor(state['mesh']['faces'], device='cuda'),
     )
-    
+
     return gs, mesh
 
 
+def state_to_o3d_mesh(state: dict) -> o3d.geometry.TriangleMesh:
+    """Convert packed state mesh data to open3d TriangleMesh."""
+    mesh = o3d.geometry.TriangleMesh()
+    mesh.vertices = o3d.utility.Vector3dVector(state['mesh']['vertices'])
+    mesh.triangles = o3d.utility.Vector3iVector(state['mesh']['faces'])
+    return mesh
+
+
 def get_seed(randomize_seed: bool, seed: int) -> int:
-    """
-    Get the random seed.
-    """
     return np.random.randint(0, MAX_SEED) if randomize_seed else seed
 
 
@@ -85,19 +91,7 @@ def text_to_3d(
     req: gr.Request,
 ) -> Tuple[dict, str]:
     """
-    Convert an text prompt to a 3D model.
-
-    Args:
-        prompt (str): The text prompt.
-        seed (int): The random seed.
-        ss_guidance_strength (float): The guidance strength for sparse structure generation.
-        ss_sampling_steps (int): The number of sampling steps for sparse structure generation.
-        slat_guidance_strength (float): The guidance strength for structured latent generation.
-        slat_sampling_steps (int): The number of sampling steps for structured latent generation.
-
-    Returns:
-        dict: The information of the generated 3D model.
-        str: The path to the video of the 3D model.
+    Convert a text prompt to a 3D model.
     """
     user_dir = os.path.join(TMP_DIR, str(req.session_hash))
     outputs = pipeline.run(
@@ -123,6 +117,49 @@ def text_to_3d(
     return state, video_path
 
 
+def text_variant(
+    variant_prompt: str,
+    seed: int,
+    slat_guidance_strength: float,
+    slat_sampling_steps: int,
+    output_buf: dict,
+    variant_mesh_file: str,
+    req: gr.Request,
+) -> Tuple[dict, str]:
+    """
+    Generate a variant of a 3D model using a text prompt.
+    Uses either the previously generated mesh or an uploaded PLY file as base.
+    """
+    user_dir = os.path.join(TMP_DIR, str(req.session_hash))
+
+    # Load base mesh: prefer uploaded file, fall back to previous generation
+    if variant_mesh_file is not None:
+        base_mesh = o3d.io.read_triangle_mesh(variant_mesh_file)
+    elif output_buf is not None:
+        base_mesh = state_to_o3d_mesh(output_buf)
+    else:
+        raise gr.Error("No base mesh available. Generate a model first or upload a PLY file.")
+
+    outputs = pipeline.run_variant(
+        base_mesh,
+        variant_prompt,
+        seed=seed,
+        formats=["gaussian", "mesh"],
+        slat_sampler_params={
+            "steps": slat_sampling_steps,
+            "cfg_strength": slat_guidance_strength,
+        },
+    )
+    video = render_utils.render_video(outputs['gaussian'][0], num_frames=120)['color']
+    video_geo = render_utils.render_video(outputs['mesh'][0], num_frames=120)['normal']
+    video = [np.concatenate([video[i], video_geo[i]], axis=1) for i in range(len(video))]
+    video_path = os.path.join(user_dir, 'variant.mp4')
+    imageio.mimsave(video_path, video, fps=15)
+    state = pack_state(outputs['gaussian'][0], outputs['mesh'][0])
+    torch.cuda.empty_cache()
+    return state, video_path
+
+
 def extract_glb(
     state: dict,
     mesh_simplify: float,
@@ -131,14 +168,6 @@ def extract_glb(
 ) -> Tuple[str, str]:
     """
     Extract a GLB file from the 3D model.
-
-    Args:
-        state (dict): The state of the generated 3D model.
-        mesh_simplify (float): The mesh simplification factor.
-        texture_size (int): The texture resolution.
-
-    Returns:
-        str: The path to the extracted GLB file.
     """
     user_dir = os.path.join(TMP_DIR, str(req.session_hash))
     gs, mesh = unpack_state(state)
@@ -152,12 +181,6 @@ def extract_glb(
 def extract_gaussian(state: dict, req: gr.Request) -> Tuple[str, str]:
     """
     Extract a Gaussian file from the 3D model.
-
-    Args:
-        state (dict): The state of the generated 3D model.
-
-    Returns:
-        str: The path to the extracted Gaussian file.
     """
     user_dir = os.path.join(TMP_DIR, str(req.session_hash))
     gs, _ = unpack_state(state)
@@ -171,52 +194,73 @@ with gr.Blocks(delete_cache=(600, 600)) as demo:
     gr.Markdown("""
     ## Text to 3D Asset with [TRELLIS](https://trellis3d.github.io/)
     * Type a text prompt and click "Generate" to create a 3D asset.
+    * Use the "Variant Editor" tab to modify an existing 3D model with a text description.
     * If you find the generated 3D asset satisfactory, click "Extract GLB" to extract the GLB file and download it.
     """)
-    
+
     with gr.Row():
         with gr.Column():
-            text_prompt = gr.Textbox(label="Text Prompt", lines=5)
-            
-            with gr.Accordion(label="Generation Settings", open=False):
-                seed = gr.Slider(0, MAX_SEED, label="Seed", value=0, step=1)
-                randomize_seed = gr.Checkbox(label="Randomize Seed", value=True)
-                gr.Markdown("Stage 1: Sparse Structure Generation")
-                with gr.Row():
-                    ss_guidance_strength = gr.Slider(0.0, 10.0, label="Guidance Strength", value=7.5, step=0.1)
-                    ss_sampling_steps = gr.Slider(1, 50, label="Sampling Steps", value=25, step=1)
-                gr.Markdown("Stage 2: Structured Latent Generation")
-                with gr.Row():
-                    slat_guidance_strength = gr.Slider(0.0, 10.0, label="Guidance Strength", value=7.5, step=0.1)
-                    slat_sampling_steps = gr.Slider(1, 50, label="Sampling Steps", value=25, step=1)
+            with gr.Tabs() as input_tabs:
+                with gr.Tab(label="Text to 3D", id=0) as text_tab:
+                    text_prompt = gr.Textbox(label="Text Prompt", lines=3, placeholder="A chair that looks like an avocado")
 
-            generate_btn = gr.Button("Generate")
-            
+                    with gr.Accordion(label="Generation Settings", open=False):
+                        seed = gr.Slider(0, MAX_SEED, label="Seed", value=0, step=1)
+                        randomize_seed = gr.Checkbox(label="Randomize Seed", value=True)
+                        gr.Markdown("Stage 1: Sparse Structure Generation")
+                        with gr.Row():
+                            ss_guidance_strength = gr.Slider(0.0, 10.0, label="Guidance Strength", value=7.5, step=0.1)
+                            ss_sampling_steps = gr.Slider(1, 50, label="Sampling Steps", value=25, step=1)
+                        gr.Markdown("Stage 2: Structured Latent Generation")
+                        with gr.Row():
+                            slat_guidance_strength = gr.Slider(0.0, 10.0, label="Guidance Strength", value=7.5, step=0.1)
+                            slat_sampling_steps = gr.Slider(1, 50, label="Sampling Steps", value=25, step=1)
+
+                    generate_btn = gr.Button("Generate")
+
+                with gr.Tab(label="Variant Editor", id=1) as variant_tab:
+                    gr.Markdown("""
+                    Generate a variant of an existing 3D model using a text description.
+                    You can either use the previously generated model or upload your own PLY mesh file.
+                    """)
+                    variant_prompt = gr.Textbox(label="Variant Prompt", lines=3, placeholder="Rugged, metallic texture with orange paint finish")
+                    variant_mesh_file = gr.File(label="Upload Base Mesh (PLY/OBJ)", file_types=[".ply", ".obj", ".glb"], type="filepath")
+                    gr.Markdown("*Leave empty to use the previously generated model as base.*")
+
+                    with gr.Accordion(label="Variant Settings", open=False):
+                        variant_seed = gr.Slider(0, MAX_SEED, label="Seed", value=0, step=1)
+                        variant_randomize_seed = gr.Checkbox(label="Randomize Seed", value=True)
+                        gr.Markdown("Structured Latent Generation")
+                        with gr.Row():
+                            variant_slat_guidance = gr.Slider(0.0, 10.0, label="Guidance Strength", value=7.5, step=0.1)
+                            variant_slat_steps = gr.Slider(1, 50, label="Sampling Steps", value=25, step=1)
+
+                    variant_btn = gr.Button("Generate Variant")
+
             with gr.Accordion(label="GLB Extraction Settings", open=False):
                 mesh_simplify = gr.Slider(0.9, 0.98, label="Simplify", value=0.95, step=0.01)
                 texture_size = gr.Slider(512, 2048, label="Texture Size", value=1024, step=512)
-            
+
             with gr.Row():
                 extract_glb_btn = gr.Button("Extract GLB", interactive=False)
                 extract_gs_btn = gr.Button("Extract Gaussian", interactive=False)
-            gr.Markdown("""
-                        *NOTE: Gaussian file can be very large (~50MB), it will take a while to display and download.*
-                        """)
+            gr.Markdown("*NOTE: Gaussian file can be very large (~50MB), it will take a while to display and download.*")
 
         with gr.Column():
             video_output = gr.Video(label="Generated 3D Asset", autoplay=True, loop=True, height=300)
             model_output = LitModel3D(label="Extracted GLB/Gaussian", exposure=10.0, height=300)
-            
+
             with gr.Row():
                 download_glb = gr.DownloadButton(label="Download GLB", interactive=False)
-                download_gs = gr.DownloadButton(label="Download Gaussian", interactive=False)  
-    
+                download_gs = gr.DownloadButton(label="Download Gaussian", interactive=False)
+
     output_buf = gr.State()
 
     # Handlers
     demo.load(start_session)
     demo.unload(end_session)
 
+    # Text to 3D generation
     generate_btn.click(
         get_seed,
         inputs=[randomize_seed, seed],
@@ -224,6 +268,20 @@ with gr.Blocks(delete_cache=(600, 600)) as demo:
     ).then(
         text_to_3d,
         inputs=[text_prompt, seed, ss_guidance_strength, ss_sampling_steps, slat_guidance_strength, slat_sampling_steps],
+        outputs=[output_buf, video_output],
+    ).then(
+        lambda: tuple([gr.Button(interactive=True), gr.Button(interactive=True)]),
+        outputs=[extract_glb_btn, extract_gs_btn],
+    )
+
+    # Variant generation
+    variant_btn.click(
+        get_seed,
+        inputs=[variant_randomize_seed, variant_seed],
+        outputs=[variant_seed],
+    ).then(
+        text_variant,
+        inputs=[variant_prompt, variant_seed, variant_slat_guidance, variant_slat_steps, output_buf, variant_mesh_file],
         outputs=[output_buf, video_output],
     ).then(
         lambda: tuple([gr.Button(interactive=True), gr.Button(interactive=True)]),
@@ -243,7 +301,7 @@ with gr.Blocks(delete_cache=(600, 600)) as demo:
         lambda: gr.Button(interactive=True),
         outputs=[download_glb],
     )
-    
+
     extract_gs_btn.click(
         extract_gaussian,
         inputs=[output_buf],
@@ -257,10 +315,33 @@ with gr.Blocks(delete_cache=(600, 600)) as demo:
         lambda: gr.Button(interactive=False),
         outputs=[download_glb],
     )
-    
+
 
 # Launch the Gradio app
 if __name__ == "__main__":
-    pipeline = TrellisTextTo3DPipeline.from_pretrained("microsoft/TRELLIS-text-xlarge")
+    import argparse
+    from trellis.utils.vram_manager import init_vram_manager
+
+    parser = argparse.ArgumentParser(description="TRELLIS Text-to-3D (Blackwell)")
+    parser.add_argument('--model', default='microsoft/TRELLIS-text-large',
+                        help='Model to use (default: microsoft/TRELLIS-text-large). '
+                             'Options: microsoft/TRELLIS-text-base, microsoft/TRELLIS-text-large, '
+                             'microsoft/TRELLIS-text-xlarge')
+    parser.add_argument('--precision', choices=['auto', 'full', 'half'], default='auto',
+                        help='Precision mode: auto (detect VRAM), full (float32), half (float16)')
+    parser.add_argument('--vram-tier', choices=['auto', 'high', 'medium', 'low'], default='auto',
+                        help='VRAM tier: auto (detect), high (>=24GB), medium (12-23GB), low (8-11GB)')
+    parser.add_argument('--host', default='0.0.0.0', help='Host to bind to')
+    parser.add_argument('--port', type=int, default=7861, help='Port to bind to')
+    parser.add_argument('--share', action='store_true', help='Create public Gradio link')
+    args = parser.parse_args()
+
+    vm = init_vram_manager(precision=args.precision, vram_tier=args.vram_tier)
+
+    print(f"Loading text-to-3D model: {args.model}")
+    pipeline = TrellisTextTo3DPipeline.from_pretrained(args.model)
     pipeline.cuda()
-    demo.launch()
+    if vm.dtype == torch.float16:
+        pipeline.to_dtype(torch.float16)
+
+    demo.launch(server_name=args.host, server_port=args.port, share=args.share)

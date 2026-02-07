@@ -1,0 +1,67 @@
+# TRELLIS Blackwell - Pinned Dependencies
+# Target: Ubuntu 24.04, Python 3.11, CUDA 12.8, RTX 5080 (compute 10.0)
+
+# Core ML - install from https://download.pytorch.org/whl/cu128
+torch==2.7.0+cu128
+torchvision==0.22.0+cu128
+torchaudio==2.7.0+cu128
+
+# Attention backends - install from https://download.pytorch.org/whl/cu128
+xformers==0.0.30
+
+# flash-attn has NO pip wheels - use prebuilt from https://github.com/Dao-AILab/flash-attention/releases
+# or from flashattn.dev. Install separately:
+#   pip install flash-attn==2.8.3 --no-build-isolation
+flash-attn==2.8.3
+
+# Sparse convolution - NO cu128 exists; cu126 works via CUDA forward compat
+# Do NOT manually install cumm-cu128 (incompatible with spconv 2.3.8)
+spconv-cu126==2.3.8
+
+# 3D libraries
+# kaolin: NO cu128 wheel for torch>=2.6; use cu124 via forward compat
+#   pip install kaolin==0.18.0 -f https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.7.0_cu126.html
+kaolin==0.18.0
+open3d==0.19.0
+trimesh==4.11.1
+pyvista==0.46.5
+pymeshfix==0.17.0
+xatlas==0.0.10
+
+# CUDA extensions - compile from source with TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;10.0"
+#   pip install git+https://github.com/NVlabs/nvdiffrast.git
+#   pip install git+https://github.com/JeffreyXiang/diffoctreerast.git
+# nvdiffrast==0.4.0
+# diffoctreerast (from source)
+# diff_gaussian_rasterization (from mip-splatting submodule)
+
+# Background removal
+rembg>=2.0.72
+onnxruntime-gpu==1.24.1
+
+# Image / video
+pillow>=10.4.0
+imageio>=2.37.0
+imageio-ffmpeg>=0.5.1
+opencv-python-headless>=4.11.0
+
+# General utilities
+tqdm
+easydict
+scipy
+ninja
+igraph
+transformers
+
+# 3D utils
+utils3d @ git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8
+
+# Web UI
+gradio==4.44.1
+gradio_litmodel3d==0.0.1
+
+# Training (optional)
+# tensorboard
+# pandas
+# lpips
+# pillow-simd

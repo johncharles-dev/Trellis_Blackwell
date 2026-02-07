@@ -8,6 +8,8 @@ if ATTN == 'xformers':
     import xformers.ops as xops
 elif ATTN == 'flash_attn':
     import flash_attn
+elif ATTN == 'sdpa':
+    from torch.nn.functional import scaled_dot_product_attention as sdpa
 else:
     raise ValueError(f"Unknown attention module: {ATTN}")
 
@@ -110,6 +112,13 @@ def sparse_windowed_scaled_dot_product_self_attention(
             out = xops.memory_efficient_attention(q, k, v)          # [B, N, H, C]
         elif ATTN == 'flash_attn':
             out = flash_attn.flash_attn_qkvpacked_func(qkv_feats)   # [B, N, H, C]
+        elif ATTN == 'sdpa':
+            q, k, v = qkv_feats.unbind(dim=2)                       # [B, N, H, C]
+            q = q.permute(0, 2, 1, 3)                               # [B, H, N, C]
+            k = k.permute(0, 2, 1, 3)                               # [B, H, N, C]
+            v = v.permute(0, 2, 1, 3)                               # [B, H, N, C]
+            out = sdpa(q, k, v)                                      # [B, H, N, C]
+            out = out.permute(0, 2, 1, 3)                            # [B, N, H, C]
         else:
             raise ValueError(f"Unknown attention module: {ATTN}")
         out = out.reshape(B * N, H, C)                              # [M, H, C]
@@ -125,6 +134,18 @@ def sparse_windowed_scaled_dot_product_self_attention(
             cu_seqlens = torch.cat([torch.tensor([0]), torch.cumsum(torch.tensor(seq_lens), dim=0)], dim=0) \
                         .to(qkv.device).int()
             out = flash_attn.flash_attn_varlen_qkvpacked_func(qkv_feats, cu_seqlens, max(seq_lens)) # [M, H, C]
+        elif ATTN == 'sdpa':
+            q, k, v = qkv_feats.unbind(dim=1)                       # [M, H, C]
+            outs = []
+            offset = 0
+            for seq_len in seq_lens:
+                qi = q[offset:offset+seq_len].unsqueeze(0).permute(0, 2, 1, 3)  # [1, H, L, C]
+                ki = k[offset:offset+seq_len].unsqueeze(0).permute(0, 2, 1, 3)
+                vi = v[offset:offset+seq_len].unsqueeze(0).permute(0, 2, 1, 3)
+                oi = sdpa(qi, ki, vi)
+                outs.append(oi.permute(0, 2, 1, 3).squeeze(0))      # [L, H, C]
+                offset += seq_len
+            out = torch.cat(outs, dim=0)                             # [M, H, C]
 
     out = out[bwd_indices]      # [T, H, C]
 

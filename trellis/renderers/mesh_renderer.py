@@ -91,7 +91,7 @@ class MeshRenderer:
         RT = extrinsics.unsqueeze(0)
         full_proj = (perspective @ extrinsics).unsqueeze(0)
         
-        vertices = mesh.vertices.unsqueeze(0)
+        vertices = mesh.vertices.float().unsqueeze(0)
 
         vertices_homo = torch.cat([vertices, torch.ones_like(vertices[..., :1])], dim=-1)
         vertices_camera = torch.bmm(vertices_homo, RT.transpose(-1, -2))

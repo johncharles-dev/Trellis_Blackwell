@@ -22,15 +22,15 @@ def yaw_pitch_r_fov_to_extrinsics_intrinsics(yaws, pitchs, rs, fovs):
     extrinsics = []
     intrinsics = []
     for yaw, pitch, r, fov in zip(yaws, pitchs, rs, fovs):
-        fov = torch.deg2rad(torch.tensor(float(fov))).cuda()
-        yaw = torch.tensor(float(yaw)).cuda()
-        pitch = torch.tensor(float(pitch)).cuda()
+        fov = torch.deg2rad(torch.tensor(float(fov), dtype=torch.float32)).cuda()
+        yaw = torch.tensor(float(yaw), dtype=torch.float32).cuda()
+        pitch = torch.tensor(float(pitch), dtype=torch.float32).cuda()
         orig = torch.tensor([
             torch.sin(yaw) * torch.cos(pitch),
             torch.cos(yaw) * torch.cos(pitch),
             torch.sin(pitch),
-        ]).cuda() * r
-        extr = utils3d.torch.extrinsics_look_at(orig, torch.tensor([0, 0, 0]).float().cuda(), torch.tensor([0, 0, 1]).float().cuda())
+        ], dtype=torch.float32).cuda() * r
+        extr = utils3d.torch.extrinsics_look_at(orig, torch.tensor([0, 0, 0], dtype=torch.float32).cuda(), torch.tensor([0, 0, 1], dtype=torch.float32).cuda())
         intr = utils3d.torch.intrinsics_from_fov_xy(fov, fov)
         extrinsics.append(extr)
         intrinsics.append(intr)

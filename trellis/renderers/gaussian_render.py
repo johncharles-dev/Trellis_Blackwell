@@ -57,8 +57,20 @@ def render(viewpoint_camera, pc : Gaussian, pipe, bg_color : torch.Tensor, scali
     if 'GaussianRasterizer' not in globals():
         from diff_gaussian_rasterization import GaussianRasterizer, GaussianRasterizationSettings
     
+    # Ensure all Gaussian internal data is float32 (rasterizer C++ requires it)
+    if pc._xyz is not None and pc._xyz.dtype != torch.float32:
+        pc._xyz = pc._xyz.float()
+    if pc._features_dc is not None and pc._features_dc.dtype != torch.float32:
+        pc._features_dc = pc._features_dc.float()
+    if pc._scaling is not None and pc._scaling.dtype != torch.float32:
+        pc._scaling = pc._scaling.float()
+    if pc._rotation is not None and pc._rotation.dtype != torch.float32:
+        pc._rotation = pc._rotation.float()
+    if pc._opacity is not None and pc._opacity.dtype != torch.float32:
+        pc._opacity = pc._opacity.float()
+
     # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
-    screenspace_points = torch.zeros_like(pc.get_xyz, dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda") + 0
+    screenspace_points = torch.zeros_like(pc.get_xyz, dtype=torch.float32, requires_grad=True, device="cuda") + 0
     try:
         screenspace_points.retain_grad()
     except:
@@ -89,9 +101,9 @@ def render(viewpoint_camera, pc : Gaussian, pipe, bg_color : torch.Tensor, scali
     
     rasterizer = GaussianRasterizer(raster_settings=raster_settings)
 
-    means3D = pc.get_xyz
+    means3D = pc.get_xyz.float()
     means2D = screenspace_points
-    opacity = pc.get_opacity
+    opacity = pc.get_opacity.float()
 
     # If precomputed 3d covariance is provided, use it. If not, then it will be computed from
     # scaling / rotation by the rasterizer.
@@ -99,10 +111,10 @@ def render(viewpoint_camera, pc : Gaussian, pipe, bg_color : torch.Tensor, scali
     rotations = None
     cov3D_precomp = None
     if pipe.compute_cov3D_python:
-        cov3D_precomp = pc.get_covariance(scaling_modifier)
+        cov3D_precomp = pc.get_covariance(scaling_modifier).float()
     else:
-        scales = pc.get_scaling
-        rotations = pc.get_rotation
+        scales = pc.get_scaling.float()
+        rotations = pc.get_rotation.float()
 
     # If precomputed colors are provided, use them. Otherwise, if it is desired to precompute colors
     # from SHs in Python, do it. If not, then SH -> RGB conversion will be done by rasterizer.
@@ -110,15 +122,15 @@ def render(viewpoint_camera, pc : Gaussian, pipe, bg_color : torch.Tensor, scali
     colors_precomp = None
     if override_color is None:
         if pipe.convert_SHs_python:
-            shs_view = pc.get_features.transpose(1, 2).view(-1, 3, (pc.max_sh_degree+1)**2)
-            dir_pp = (pc.get_xyz - viewpoint_camera.camera_center.repeat(pc.get_features.shape[0], 1))
+            shs_view = pc.get_features.float().transpose(1, 2).view(-1, 3, (pc.max_sh_degree+1)**2)
+            dir_pp = (means3D - viewpoint_camera.camera_center.repeat(pc.get_features.shape[0], 1))
             dir_pp_normalized = dir_pp/dir_pp.norm(dim=1, keepdim=True)
             sh2rgb = eval_sh(pc.active_sh_degree, shs_view, dir_pp_normalized)
             colors_precomp = torch.clamp_min(sh2rgb + 0.5, 0.0)
         else:
-            shs = pc.get_features
+            shs = pc.get_features.float()
     else:
-        colors_precomp = override_color
+        colors_precomp = override_color.float()
 
     # Rasterize visible Gaussians to image, obtain their radii (on screen). 
     rendered_image, radii = rasterizer(
