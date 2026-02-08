@@ -103,6 +103,15 @@ model_device = param.device
 4. For variable-length sequences: process per-sequence in a loop
 5. Full attention (`trellis/modules/attention/`) already supported `sdpa` natively.
 
+**IMPORTANT — Both env vars are required and control different code paths:**
+
+| Env Var | What it controls | Without it |
+|---------|-----------------|------------|
+| `ATTN_BACKEND=sdpa` | Trellis sparse/dense attention layers (`trellis/modules/`) | Trellis tries xFormers → crash |
+| `XFORMERS_DISABLED=1` | DINOv2 image encoder (external lib loaded via `torch.hub`) | DINOv2 tries `xformers.ops.memory_efficient_attention()` → fatal CUDA error |
+
+Setting only `ATTN_BACKEND=sdpa` is **not enough** — the app will start and the Gradio UI will load, but it will crash on the first image upload when DINOv2 runs its forward pass. The `XFORMERS_DISABLED` env var is checked by DINOv2's `MemEffAttention` class (`dinov2/layers/attention.py:21`) and makes it fall back to PyTorch's native `F.scaled_dot_product_attention`, which supports Blackwell natively.
+
 ## 11. TimestepEmbedder dtype Mismatch (Float vs Half)
 **Error**: `RuntimeError: mat1 and mat2 must have the same dtype, but got Float and Half`
 **Cause**: `timestep_embedding()` produces float32 sinusoidal embeddings, but the MLP weights are float16 after `to_dtype(torch.float16)`.

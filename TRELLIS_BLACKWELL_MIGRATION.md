@@ -93,6 +93,88 @@ export TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;10.0"
 
 ---
 
+## System Requirements
+
+### Minimum Requirements
+
+| Component | Minimum |
+|-----------|---------|
+| **GPU** | NVIDIA GPU, 8GB VRAM, compute capability 8.0+ (Ampere or newer) |
+| **OS** | Linux (Ubuntu 22.04+) |
+| **Driver** | NVIDIA 570+ (`nvidia-driver-570-open` required for Blackwell GPUs) |
+| **CUDA Toolkit** | 12.8 |
+| **Python** | 3.11 (via conda — Ubuntu 24.04 ships 3.12 which is untested) |
+| **PyTorch** | 2.7.0+cu128 |
+| **RAM** | 16GB (model swapping requires CPU memory for offloaded models) |
+| **Storage** | ~10GB (pretrained models + dependencies) |
+
+### Recommended Requirements
+
+| Component | Recommended |
+|-----------|-------------|
+| **GPU** | NVIDIA RTX 5080/5090 (Blackwell) or RTX 4090, 16GB+ VRAM |
+| **OS** | Ubuntu 24.04 LTS |
+| **Driver** | NVIDIA 570+ open kernel modules |
+| **CUDA Toolkit** | 12.8 |
+| **Python** | 3.11 |
+| **PyTorch** | 2.7.0+cu128 |
+| **RAM** | 32GB+ |
+| **Storage** | 20GB+ |
+
+### VRAM Tiers (auto-detected by VRAMManager)
+
+| Tier | VRAM | Precision | Model Swapping | FlexiCubes | Background Removal |
+|------|------|-----------|----------------|------------|--------------------|
+| **High** | 24GB+ | float32 | None — all models stay on GPU | int64 (default) | GPU (CUDA) |
+| **Medium** | 12–23GB | float16 | Between pipeline stages (1–2 models on GPU at a time) | int64 (default) | GPU (CUDA) |
+| **Low** | 8–11GB | float16 | Aggressive (single model on GPU at a time) | int32 (saves memory) | CPU |
+
+### Supported GPUs
+
+| GPU | Architecture | Compute | VRAM | Tier | Status |
+|-----|-------------|---------|------|------|--------|
+| RTX 5090 | Blackwell | 12.0 | 32GB | High | Untested (expected to work) |
+| RTX 5080 | Blackwell | 12.0 | 16GB | Medium | Verified |
+| RTX 4090 | Ada Lovelace | 8.9 | 24GB | High | Supported |
+| RTX 3090 | Ampere | 8.6 | 24GB | High | Supported |
+| A100 | Ampere | 8.0 | 40/80GB | High | Supported (upstream reference GPU) |
+| A6000 | Ampere | 8.6 | 48GB | High | Supported (upstream reference GPU) |
+
+### Launch Command
+
+```bash
+XFORMERS_DISABLED=1 ATTN_BACKEND=sdpa python -u app.py --precision auto --host 127.0.0.1
+```
+
+Both environment variables are **required** on Blackwell GPUs:
+- `ATTN_BACKEND=sdpa` — switches Trellis sparse/dense attention to PyTorch native SDPA
+- `XFORMERS_DISABLED=1` — switches DINOv2 image encoder (external library) to PyTorch native SDPA
+
+On non-Blackwell GPUs with working xFormers/flash-attn, these env vars are optional.
+
+---
+
+## Known Limitations
+
+1. **xFormers flash-attention is disabled on Blackwell** — xformers 0.0.30 has no compiled kernels for sm_120. Both DINOv2 and Trellis attention fall back to PyTorch native SDPA via env vars. Functionally equivalent but may have slightly different performance characteristics compared to flash-attention.
+
+2. **CUDA extensions rely on forward compatibility** — spconv (cu126) and kaolin (cu126) have no native cu128 builds. They work via CUDA forward compatibility but are not optimally compiled for Blackwell. Native cu128 builds should be used when available.
+
+3. **float16 dtype mismatches required 16 fixes** — Running in medium/low tier (float16) exposed dtype mismatches in TimestepEmbedder, FlexiCubes, Gaussian renderer, and mesh renderer. All are patched but new model versions or features may introduce new mismatches.
+
+4. **Model swapping adds latency on 16GB GPUs** — Medium tier swaps models between CPU and GPU between pipeline stages. This adds several seconds per generation compared to 24GB+ GPUs that keep all models resident on GPU.
+
+5. **Linux only** — Verified on Ubuntu 24.04. Windows support is partially implemented (`install.py`) but not fully tested.
+
+6. **Blackwell-specific system requirements**:
+   - Must use open kernel modules (`nvidia-driver-570-open`), proprietary driver does not work
+   - Must use X11 display server, Wayland crashes with RTX 50 series
+   - BIOS must have "Above 4G Decoding" + "Resizable BAR" enabled, CSM disabled
+
+7. **All CUDA extensions must be compiled with sm_120 (or 10.0) in TORCH_CUDA_ARCH_LIST** — PTX fallback from older architectures produces garbage values on Blackwell. This applies to: nvdiffrast, diffoctreerast, diff-gaussian-rasterization, and vox2seq.
+
+---
+
 ## Implementation Plan — 6 Layers
 
 ### Layer 1: New Install System
