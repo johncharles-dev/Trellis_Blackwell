@@ -13,7 +13,7 @@ import argparse
 import shutil
 from pathlib import Path
 
-CUDA_ARCH_LIST = "8.0;8.6;8.9;10.0"
+CUDA_ARCH_LIST = "8.0;8.6;8.9;10.0;12.0"
 PYTORCH_INDEX = "https://download.pytorch.org/whl/cu128"
 KAOLIN_INDEX = "https://nvidia-kaolin.s3.us-east-2.amazonaws.com/torch-2.7.0_cu126.html"
 
@@ -67,6 +67,11 @@ def install_basic():
         "pip install git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8",
         "Installing utils3d"
     )
+    # Pin versions to avoid dependency conflicts
+    run_cmd(
+        'pip install "huggingface_hub>=0.23,<0.25" "transformers>=4.35.0,<4.50" "pydantic>=2.0,<2.10" "pillow>=12.1.0"',
+        "Pinning dependency versions"
+    )
 
 
 def install_xformers():
@@ -99,18 +104,18 @@ def install_kaolin():
 
 
 def install_nvdiffrast():
-    run_cmd("pip install git+https://github.com/NVlabs/nvdiffrast.git", "Installing nvdiffrast")
+    run_cmd("pip install git+https://github.com/NVlabs/nvdiffrast.git --no-build-isolation", "Installing nvdiffrast")
 
 
 def install_diffoctreerast():
-    run_cmd("pip install git+https://github.com/JeffreyXiang/diffoctreerast.git", "Installing diffoctreerast")
+    run_cmd("pip install git+https://github.com/JeffreyXiang/diffoctreerast.git --no-build-isolation", "Installing diffoctreerast")
 
 
 def install_mipgaussian():
     tmp = Path("/tmp/extensions/mip-splatting")
     if not tmp.exists():
         run_cmd(f"git clone https://github.com/autonomousvision/mip-splatting.git {tmp}", "Cloning mip-splatting")
-    run_cmd(f"pip install {tmp}/submodules/diff-gaussian-rasterization/", "Installing diff-gaussian-rasterization")
+    run_cmd(f"pip install {tmp}/submodules/diff-gaussian-rasterization/ --no-build-isolation", "Installing diff-gaussian-rasterization")
 
 
 def install_demo():
@@ -134,6 +139,8 @@ def main():
 
     # Set environment
     os.environ.setdefault("CUDA_HOME", "/usr/local/cuda-12.8")
+    cuda_bin = os.path.join(os.environ["CUDA_HOME"], "bin")
+    os.environ["PATH"] = cuda_bin + os.pathsep + os.environ.get("PATH", "")
     os.environ["TORCH_CUDA_ARCH_LIST"] = CUDA_ARCH_LIST
     print(f"[INSTALL] Platform: {platform.system()} {platform.machine()}")
     print(f"[INSTALL] Python: {sys.version}")

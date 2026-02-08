@@ -87,8 +87,8 @@ utils3d @ git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b1
 
 ```bash
 export CUDA_HOME=/usr/local/cuda-12.8
-export TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;10.0"
-# 8.0=A100, 8.6=RTX3090/A6000, 8.9=RTX4090, 10.0=RTX5080 Blackwell
+export TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;10.0;12.0"
+# 8.0=A100, 8.6=RTX3090/A6000, 8.9=RTX4090, 10.0=RTX5080 Blackwell, 12.0=Blackwell compute
 ```
 
 ---

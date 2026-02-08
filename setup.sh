@@ -111,7 +111,8 @@ detect_gpu
 
 # Set CUDA arch list based on detected GPU
 export CUDA_HOME=${CUDA_HOME:-/usr/local/cuda-12.8}
-export TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;10.0"
+export TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;10.0;12.0"
+export PATH="$CUDA_HOME/bin:$PATH"
 echo "[CUDA] CUDA_HOME=$CUDA_HOME"
 echo "[CUDA] TORCH_CUDA_ARCH_LIST=$TORCH_CUDA_ARCH_LIST"
 
@@ -156,6 +157,8 @@ if [ "$BASIC" = true ] ; then
     pip install rembg onnxruntime-gpu==1.24.1
     pip install trimesh open3d==0.19.0 xatlas pyvista pymeshfix igraph transformers
     pip install git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8
+    # Pin versions to avoid dependency conflicts
+    pip install "huggingface_hub>=0.23,<0.25" "transformers>=4.35.0,<4.50" "pydantic>=2.0,<2.10" "pillow>=12.1.0"
     echo "[BASIC] Done."
 fi
 

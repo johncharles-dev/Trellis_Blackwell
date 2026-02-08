@@ -28,7 +28,7 @@ pyvista==0.46.5
 pymeshfix==0.17.0
 xatlas==0.0.10
 
-# CUDA extensions - compile from source with TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;10.0"
+# CUDA extensions - compile from source with TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;10.0;12.0"
 #   pip install git+https://github.com/NVlabs/nvdiffrast.git
 #   pip install git+https://github.com/JeffreyXiang/diffoctreerast.git
 # nvdiffrast==0.4.0
@@ -51,7 +51,11 @@ easydict
 scipy
 ninja
 igraph
-transformers
+
+# Pinned to avoid dependency conflicts (see QUICKSTART.md troubleshooting section A)
+huggingface_hub>=0.23,<0.25
+transformers>=4.35.0,<4.50
+pydantic>=2.0,<2.10
 
 # 3D utils
 utils3d @ git+https://github.com/EasternJournalist/utils3d.git@9a4eb15e4021b67b12c460c7057d642626897ec8
