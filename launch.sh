@@ -3,9 +3,10 @@
 # Usage: ./launch.sh [image|text]
 
 CONDA_ENV="trellis-bw"
-CONDA_BIN="/home/cj/miniconda3/bin/conda"
-ENV_VARS="XFORMERS_DISABLED=1 ATTN_BACKEND=sdpa"
+PYTHON="/home/cj/miniconda3/envs/trellis-bw/bin/python"
 COMMON_ARGS="--precision auto --host 127.0.0.1"
+export XFORMERS_DISABLED=1
+export ATTN_BACKEND=sdpa
 
 # Kill any running TRELLIS instance
 kill_existing() {
@@ -21,12 +22,14 @@ case "${1:-}" in
     image|img|i)
         kill_existing
         echo "Starting Image-to-3D on http://127.0.0.1:7860"
-        $CONDA_BIN run -n $CONDA_ENV bash -c "$ENV_VARS python -u app.py $COMMON_ARGS"
+        cd /home/cj/Trellis_Blackwell
+        $PYTHON -u app.py $COMMON_ARGS
         ;;
     text|txt|t)
         kill_existing
         echo "Starting Text-to-3D on http://127.0.0.1:7861"
-        $CONDA_BIN run -n $CONDA_ENV bash -c "$ENV_VARS python -u app_text.py $COMMON_ARGS"
+        cd /home/cj/Trellis_Blackwell
+        $PYTHON -u app_text.py $COMMON_ARGS
         ;;
     stop|kill|k)
         kill_existing
