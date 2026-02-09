@@ -464,6 +464,49 @@ def to_glb(
     return mesh
 
 
+def to_mesh_geometry(
+    mesh: MeshExtractResult,
+    simplify: float = 0.95,
+    fill_holes: bool = True,
+    fill_holes_max_size: float = 0.04,
+    debug: bool = False,
+    verbose: bool = True,
+) -> trimesh.Trimesh:
+    """
+    Convert extracted mesh to a bare geometry trimesh (no texture baking).
+    Useful for STL and other geometry-only export formats.
+
+    Args:
+        mesh (MeshExtractResult): Extracted mesh.
+        simplify (float): Ratio of faces to remove in simplification.
+        fill_holes (bool): Whether to fill holes in the mesh.
+        fill_holes_max_size (float): Maximum area of a hole to fill.
+        debug (bool): Whether to print debug information.
+        verbose (bool): Whether to print progress.
+    """
+    vertices = mesh.vertices.cpu().numpy()
+    faces = mesh.faces.cpu().numpy()
+
+    # mesh postprocess
+    vertices, faces = postprocess_mesh(
+        vertices, faces,
+        simplify=simplify > 0,
+        simplify_ratio=simplify,
+        fill_holes=fill_holes,
+        fill_holes_max_hole_size=fill_holes_max_size,
+        fill_holes_max_hole_nbe=int(250 * np.sqrt(1-simplify)),
+        fill_holes_resolution=1024,
+        fill_holes_num_views=1000,
+        debug=debug,
+        verbose=verbose,
+    )
+
+    # rotate mesh (from z-up to y-up)
+    vertices = vertices @ np.array([[1, 0, 0], [0, 0, -1], [0, 1, 0]])
+
+    return trimesh.Trimesh(vertices, faces)
+
+
 def simplify_gs(
     gs: Gaussian,
     simplify: float = 0.95,

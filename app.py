@@ -3,6 +3,7 @@ from gradio_litmodel3d import LitModel3D
 
 import os
 import shutil
+import zipfile
 from typing import *
 import torch
 import numpy as np
@@ -177,28 +178,58 @@ def image_to_3d(
     return state, video_path
 
 
-def extract_glb(
+def extract_mesh(
     state: dict,
     mesh_simplify: float,
     texture_size: int,
+    export_format: str,
     req: gr.Request,
 ) -> Tuple[str, str]:
     """
-    Extract a GLB file from the 3D model.
+    Extract a mesh file from the 3D model.
 
     Args:
         state (dict): The state of the generated 3D model.
         mesh_simplify (float): The mesh simplification factor.
         texture_size (int): The texture resolution.
+        export_format (str): The export format ("GLB", "OBJ", "STL").
 
     Returns:
-        str: The path to the extracted GLB file.
+        str: The path to the extracted mesh file (for viewer and download).
     """
     user_dir = os.path.join(TMP_DIR, str(req.session_hash))
     gs, mesh = unpack_state(state)
-    glb = postprocessing_utils.to_glb(gs, mesh, simplify=mesh_simplify, texture_size=texture_size, verbose=False)
+
+    if export_format == "STL":
+        gr.Info("STL is geometry-only — textures are skipped for faster extraction.")
+        mesh_obj = postprocessing_utils.to_mesh_geometry(mesh, simplify=mesh_simplify, verbose=False)
+        stl_path = os.path.join(user_dir, 'sample.stl')
+        mesh_obj.export(stl_path)
+        torch.cuda.empty_cache()
+        return stl_path, stl_path
+
+    # GLB and OBJ both need the textured mesh from to_glb()
+    glb_mesh = postprocessing_utils.to_glb(gs, mesh, simplify=mesh_simplify, texture_size=texture_size, verbose=False)
+
+    if export_format == "OBJ":
+        obj_dir = os.path.join(user_dir, 'obj_export')
+        os.makedirs(obj_dir, exist_ok=True)
+        obj_path = os.path.join(obj_dir, 'sample.obj')
+        glb_mesh.export(obj_path)
+        # Zip OBJ + MTL + texture files for single-file download
+        zip_path = os.path.join(user_dir, 'sample.zip')
+        with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for fname in os.listdir(obj_dir):
+                zf.write(os.path.join(obj_dir, fname), fname)
+        # Use GLB for viewer (OBJ relative paths break in Gradio file serving)
+        glb_path = os.path.join(user_dir, 'sample.glb')
+        glb_mesh.export(glb_path)
+        torch.cuda.empty_cache()
+        return glb_path, zip_path
+
+    # Default: GLB
     glb_path = os.path.join(user_dir, 'sample.glb')
-    glb.export(glb_path)
+    glb_mesh.export(glb_path)
     torch.cuda.empty_cache()
     return glb_path, glb_path
 
@@ -254,7 +285,7 @@ with gr.Blocks(delete_cache=(600, 600)) as demo:
     gr.Markdown("""
     ## Image to 3D Asset with [TRELLIS](https://trellis3d.github.io/)
     * Upload an image and click "Generate" to create a 3D asset. If the image has alpha channel, it be used as the mask. Otherwise, we use `rembg` to remove the background.
-    * If you find the generated 3D asset satisfactory, click "Extract GLB" to extract the GLB file and download it.
+    * If you find the generated 3D asset satisfactory, choose a format (GLB, OBJ, or STL) and click "Extract Mesh" to extract and download it.
     """)
     
     with gr.Row():
@@ -285,12 +316,18 @@ with gr.Blocks(delete_cache=(600, 600)) as demo:
 
             generate_btn = gr.Button("Generate")
             
-            with gr.Accordion(label="GLB Extraction Settings", open=False):
+            with gr.Accordion(label="Mesh Extraction Settings", open=False):
                 mesh_simplify = gr.Slider(0.9, 0.98, label="Simplify", value=0.95, step=0.01)
-                texture_size = gr.Slider(512, 2048, label="Texture Size", value=1024, step=512)
-            
+                texture_size = gr.Slider(512, 4096, label="Texture Size", value=1024, step=512)
+                export_format = gr.Radio(
+                    ["GLB", "OBJ", "STL"],
+                    label="Export Format",
+                    value="GLB",
+                    info="GLB: textured PBR mesh | OBJ: textured mesh (zipped) | STL: geometry only (fast, no textures)",
+                )
+
             with gr.Row():
-                extract_glb_btn = gr.Button("Extract GLB", interactive=False)
+                extract_mesh_btn = gr.Button("Extract Mesh", interactive=False)
                 extract_gs_btn = gr.Button("Extract Gaussian", interactive=False)
             gr.Markdown("""
                         *NOTE: Gaussian file can be very large (~50MB), it will take a while to display and download.*
@@ -298,11 +335,11 @@ with gr.Blocks(delete_cache=(600, 600)) as demo:
 
         with gr.Column():
             video_output = gr.Video(label="Generated 3D Asset", autoplay=True, loop=True, height=300)
-            model_output = LitModel3D(label="Extracted GLB/Gaussian", exposure=10.0, height=300)
-            
+            model_output = LitModel3D(label="Extracted Mesh/Gaussian", exposure=10.0, height=300)
+
             with gr.Row():
-                download_glb = gr.DownloadButton(label="Download GLB", interactive=False)
-                download_gs = gr.DownloadButton(label="Download Gaussian", interactive=False)  
+                download_mesh = gr.DownloadButton(label="Download Mesh", interactive=False)
+                download_gs = gr.DownloadButton(label="Download Gaussian", interactive=False)
     
     is_multiimage = gr.State(False)
     output_buf = gr.State()
@@ -364,23 +401,23 @@ with gr.Blocks(delete_cache=(600, 600)) as demo:
         outputs=[output_buf, video_output],
     ).then(
         lambda: tuple([gr.Button(interactive=True), gr.Button(interactive=True)]),
-        outputs=[extract_glb_btn, extract_gs_btn],
+        outputs=[extract_mesh_btn, extract_gs_btn],
     )
 
     video_output.clear(
         lambda: tuple([gr.Button(interactive=False), gr.Button(interactive=False)]),
-        outputs=[extract_glb_btn, extract_gs_btn],
+        outputs=[extract_mesh_btn, extract_gs_btn],
     )
 
-    extract_glb_btn.click(
-        extract_glb,
-        inputs=[output_buf, mesh_simplify, texture_size],
-        outputs=[model_output, download_glb],
+    extract_mesh_btn.click(
+        extract_mesh,
+        inputs=[output_buf, mesh_simplify, texture_size, export_format],
+        outputs=[model_output, download_mesh],
     ).then(
         lambda: gr.Button(interactive=True),
-        outputs=[download_glb],
+        outputs=[download_mesh],
     )
-    
+
     extract_gs_btn.click(
         extract_gaussian,
         inputs=[output_buf],
@@ -392,7 +429,7 @@ with gr.Blocks(delete_cache=(600, 600)) as demo:
 
     model_output.clear(
         lambda: gr.Button(interactive=False),
-        outputs=[download_glb],
+        outputs=[download_mesh],
     )
     
 
